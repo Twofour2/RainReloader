@@ -1,25 +1,17 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.Runtime.CompilerServices;
 using BepInEx;
 using BepInEx.Logging;
 using UnityEngine;
 using System.IO;
 using System.Linq;
-using Newtonsoft.Json;
-using RWCustom;
 using System.Text;
-using On.Menu;
-using Menu;
-using MoreSlugcats;
-using System.Runtime.ExceptionServices;
 using BepInEx.Bootstrap;
 using Mono.Cecil;
 using System.Reflection;
-using UnityEngine.Profiling.Memory.Experimental;
-using UnityEngine;
 using System.Collections;
 using HarmonyLib;
+using System.Runtime.CompilerServices;
 
 namespace RainReloader
 {
@@ -30,29 +22,25 @@ namespace RainReloader
         public const string PLUGIN_NAME = "rainreloader";
         public const string PLUGIN_DESC = "";
         public const string PLUGIN_VERSION = "0.2.9";
-
-
         public static ManualLogSource Log { get; private set; }
 
-        public static GameObject scriptManager;
+        public GameObject scriptManager;
 
         private void Awake()
         {
             Log = base.Logger;
-            Log.LogWarning("BepInPlugin has awoken! ");
-           // scriptManager = this.gameObject;
+            Log.LogInfo("RainReloader is active");
+            On.RainWorld.PreModsInit += RainWorld_PreModsInit;
            // this.AttemptReload();
+            
+            
         }
 
-        //private void RainWorldGame_RawUpdate(On.RainWorldGame.orig_RawUpdate orig, RainWorldGame self, float dt)
-        //{
-        //    orig(self, dt);
-            
-        //    if (self.devToolsActive) {
-                
-                
-        //    }
-        //}
+        private void RainWorld_PreModsInit(On.RainWorld.orig_PreModsInit orig, RainWorld self)
+        {
+            this.AttemptReload();
+            orig(self);
+        }
 
         private void Update()
         {
@@ -65,52 +53,57 @@ namespace RainReloader
         public void AttemptReload()
         {
             Log.LogInfo("ATTEMPING RELOAD");
-           // 
+
+            // get list of mods to care about
+            string[] reloadModsTxt = File.ReadAllText(Path.Combine(Application.streamingAssetsPath, "reloadMods.txt")).Split(new string[] {Environment.NewLine}, StringSplitOptions.None);
+            Log.LogInfo(reloadModsTxt);
+            scriptManager = Chainloader.ManagerObject;
+
             Log.LogWarning(scriptManager);
             if (scriptManager != null)
             {
                 Log.LogWarning(scriptManager.activeInHierarchy);
-
-
-
+                
                 foreach (BaseUnityPlugin loadedPlugin in scriptManager.GetComponents<BaseUnityPlugin>())
                 {
-                    Log.LogInfo(loadedPlugin);
-                    string metaGuid = loadedPlugin?.Info?.Metadata?.GUID ?? "";
-                    Log.LogInfo($"BepInPlugin: {metaGuid}");
-                    if (Chainloader.PluginInfos.ContainsKey(metaGuid))
+                    BepInPlugin[] bepInPluginData = MetadataHelper.GetAttributes<BepInPlugin>(loadedPlugin.GetType());
+                    foreach (BepInPlugin pluginData in bepInPluginData)
                     {
-                        Log.LogWarning($"Removing plugin ${metaGuid}");
-                        Chainloader.PluginInfos.Remove(metaGuid);
+                        Log.LogWarning($"Check plugin {pluginData.GUID}");
+                        //if (pluginData.GUID == metaGuid)
+                        
+                        if (reloadModsTxt.Contains(pluginData.GUID))
+                        {
+                            Log.LogWarning($"Removing plugin {pluginData.GUID}");
+                            Chainloader.PluginInfos.Remove(pluginData.GUID);
+                            Destroy(loadedPlugin); // todo: does not actually destroy our plugin as scriptManager is incorrect
+                        }
+                        
                     }
                 }
-                Destroy(scriptManager);
-            }
+              //  Destroy(scriptManager);
 
+            }
             // now create now?
-            scriptManager = new GameObject($"ScriptEngine_{DateTime.Now.Ticks}");
-            DontDestroyOnLoad(scriptManager);
-            
-            foreach (ModManager.Mod mod in ModManager.ActiveMods)
+            //scriptManager = new GameObject($"ScriptEngine_{DateTime.Now.Ticks}");
+            //DontDestroyOnLoad(scriptManager);
+
+            string modsFolder = Path.Combine(Application.streamingAssetsPath, "mods");
+            Log.LogWarning(modsFolder);
+
+            string[] modDllFiles = Directory.GetFiles(modsFolder, "*.dll", SearchOption.AllDirectories);
+            foreach (string file in modDllFiles)
             {
-                Log.LogWarning(mod.path);
-                string[] modDllFiles = Directory.GetFiles(mod.path, "*.dll", SearchOption.AllDirectories);
-                foreach (string file in modDllFiles)
-                {
-                    string tmpFilePath = Path.GetTempFileName();
-                    File.Copy(file,tmpFilePath, true);
-                    Log.LogInfo($"Found DLL: {file}");
-                    LoadDLL(tmpFilePath, scriptManager);
-                }
-
+                Log.LogWarning(file);
+                string tmpFilePath = Path.GetTempFileName();
+                File.Copy(file, tmpFilePath, true);
+                Log.LogInfo($"Found DLL: {file}");
+                LoadDLL(tmpFilePath, scriptManager, reloadModsTxt);
             }
-
-            
-
         }
 
 
-        private void LoadDLL(string path, GameObject scriptManager)
+        private void LoadDLL(string path, GameObject scriptManager, string[] reloadMods)
         {
             AssemblyDefinition dll = AssemblyDefinition.ReadAssembly(path);
             dll.Name.Name = $"${dll.Name.Name}-{DateTime.Now.Ticks}";
@@ -132,13 +125,20 @@ namespace RainReloader
                         continue;
                     }
 
-                    Log.LogInfo($"Loading plugin {pluginMetadata.GUID}");
-
-                    if (Chainloader.PluginInfos.TryGetValue(pluginMetadata.GUID, out var existingPluginInfo))
+                    if (!reloadMods.Contains(pluginMetadata.GUID))
                     {
-                        Log.LogError($"A plugin with GUID {pluginMetadata.GUID} is already loaded! ({existingPluginInfo.Metadata.Name} v{existingPluginInfo.Metadata.Version})");
+                        Log.LogWarning($"{pluginMetadata.GUID} is not in reload mods list");
                         continue;
                     }
+
+                    Log.LogInfo($"Loading plugin {pluginMetadata.GUID}");
+
+                    if (Chainloader.PluginInfos.TryGetValue(pluginMetadata.GUID, out PluginInfo existingPluginInfo))
+                    {
+                        Log.LogError($"A plugin with GUID {pluginMetadata?.GUID} is already loaded! ({existingPluginInfo?.Metadata?.Name ?? "None"} v{existingPluginInfo?.Metadata?.Version ?? new Version(0, 0, 0)})");
+                        continue;
+                    }
+
 
                     var typeDef = dll.MainModule.Types.First(x => x.FullName == type.FullName);
                     var pluginInfo = Chainloader.ToPluginInfo(typeDef);
@@ -148,6 +148,8 @@ namespace RainReloader
                         // Need to add to PluginInfos first because BaseUnityPlugin constructor (called by AddComponent below)
                         // looks in PluginInfos for an existing PluginInfo and uses it instead of creating a new one.
                         Chainloader.PluginInfos[pluginMetadata.GUID] = pluginInfo;
+                        //
+                       // TryRunModuleCtor(pluginInfo, assembly, typeDef);
 
                         var instance = scriptManager.AddComponent(type);
 
@@ -157,7 +159,7 @@ namespace RainReloader
                         // Loading the assembly from memory causes Location to be lost
                         tv.Property<string>(nameof(pluginInfo.Location)).Value = path;
 
-                        Log.LogInfo($"Loaded plugin {pluginMetadata.GUID}");
+                        Log.LogInfo($"Loaded plugin of type {type} with GUID {pluginMetadata.GUID}");
                     })));
 
 
@@ -168,6 +170,19 @@ namespace RainReloader
                 }
             }
 
+        }
+
+        private static void TryRunModuleCtor(PluginInfo plugin, Assembly assembly, TypeDefinition typeDef)
+        {
+            try
+            {
+                RuntimeHelpers.RunModuleConstructor(assembly.GetType(typeDef.Name).Module.ModuleHandle);
+            }
+            catch (Exception e)
+            {
+                Log.Log(LogLevel.Warning,
+                           $"Couldn't run Module constructor for {assembly.FullName}::{plugin}: {e}");
+            }
         }
 
         private IEnumerable<Type> GetTypesSafe(Assembly ass)

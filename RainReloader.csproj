@@ -51,7 +51,7 @@
   </ItemGroup>
 
   <Target Name="PostBuild" AfterTargets="PostBuildEvent">
-    <Exec Command="copy /Y &quot;$(TargetPath)&quot; &quot;C:\Program Files (x86)\Steam\steamapps\common\Rain World\BepInEx\plugins&quot;&#xD;&#xA;copy /Y &quot;$(TargetDir)RainReloader.pdb&quot; &quot;C:\Program Files (x86)\Steam\steamapps\common\Rain World\BepInEx\plugins&quot;" />
+    <Exec Command="copy /Y &quot;$(TargetPath)&quot; &quot;C:\Program Files (x86)\Steam\steamapps\common\Rain World\RainWorld_Data\StreamingAssets\mods\RainReloader\plugins&quot;&#xD;&#xA;copy /Y &quot;$(TargetDir)RainReloader.pdb&quot; &quot;C:\Program Files (x86)\Steam\steamapps\common\Rain World\RainWorld_Data\StreamingAssets\mods\RainReloader\plugins&quot;" />
   </Target>
 
 </Project>
