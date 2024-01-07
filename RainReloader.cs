@@ -24,6 +24,10 @@ namespace RainReloader
         public const string PLUGIN_VERSION = "0.2.9";
         public static ManualLogSource Log { get; private set; }
 
+        private static string modsFolder = Path.Combine(Application.streamingAssetsPath, "mods");
+        private FileSystemWatcher fileSystemWatcher;
+        private bool shouldReload = false;
+
         public GameObject scriptManager;
 
         private void Awake()
@@ -31,20 +35,18 @@ namespace RainReloader
             Log = base.Logger;
             Log.LogInfo("RainReloader is active");
             On.RainWorld.PreModsInit += RainWorld_PreModsInit;
-           // this.AttemptReload();
-            
-            
         }
 
         private void RainWorld_PreModsInit(On.RainWorld.orig_PreModsInit orig, RainWorld self)
         {
             this.AttemptReload();
+            StartFileSystemWatcher();
             orig(self);
         }
 
         private void Update()
         {
-            if (Input.GetKeyDown(KeyCode.Alpha1))
+            if (Input.GetKeyDown(KeyCode.Alpha1) || shouldReload)
             {
                 this.AttemptReload();
             }
@@ -53,6 +55,7 @@ namespace RainReloader
         public void AttemptReload()
         {
             Log.LogInfo("ATTEMPING RELOAD");
+            shouldReload = false;
 
             // get list of mods to care about
             string[] reloadModsTxt = File.ReadAllText(Path.Combine(Application.streamingAssetsPath, "reloadMods.txt")).Split(new string[] {Environment.NewLine}, StringSplitOptions.None);
@@ -88,7 +91,7 @@ namespace RainReloader
             //scriptManager = new GameObject($"ScriptEngine_{DateTime.Now.Ticks}");
             //DontDestroyOnLoad(scriptManager);
 
-            string modsFolder = Path.Combine(Application.streamingAssetsPath, "mods");
+            //string modsFolder = Path.Combine(Application.streamingAssetsPath, "mods");
             Log.LogWarning(modsFolder);
 
             string[] modDllFiles = Directory.GetFiles(modsFolder, "*.dll", SearchOption.AllDirectories);
@@ -208,6 +211,27 @@ namespace RainReloader
         {
             yield return null;
             action();
+        }
+
+        private void StartFileSystemWatcher()
+        {
+            fileSystemWatcher = new FileSystemWatcher(modsFolder)
+            {
+                IncludeSubdirectories = true
+            };
+            fileSystemWatcher.NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.FileName;
+            fileSystemWatcher.Filter = "*.dll";
+            fileSystemWatcher.Changed += FileChangedEventHandler;
+            fileSystemWatcher.Deleted += FileChangedEventHandler;
+            fileSystemWatcher.Created += FileChangedEventHandler;
+            fileSystemWatcher.Renamed += FileChangedEventHandler;
+            fileSystemWatcher.EnableRaisingEvents = true;
+        }
+
+        private void FileChangedEventHandler(object sender, FileSystemEventArgs args)
+        {
+            Log.LogInfo($"File {Path.GetFileName(args.Name)} changed. Delayed recompiling...");
+            shouldReload = true;
         }
 
 
