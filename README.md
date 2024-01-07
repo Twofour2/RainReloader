@@ -1,7 +1,7 @@
 # RainReloader
 Live reloads and re-injects BepInEx plugins into rainworld  
 
-This only barely works and isn't easy to setup. You need a good idea on how to setup a rainworld code mod to use this.  
+This mod is very early stages, isn't complete, barely works and isn't easy to setup. You need a good idea on how to setup a rainworld code mod to use this.  
 
 Enable your mod in rainworld and remove it from "Rain World\RainWorld_Data\StreamingAssets\enabledMods.txt"  
 Create a new file called "reloadMods.txt" in the same StreamingAssets folder, then add your mod GUID to it.  
@@ -26,5 +26,12 @@ You'll also need to add an OnDisable() method to your mod that removes all regis
 ```
 
 Build your new file and watch it reload :D  
+
+## Working with other mods
+Currently this breaks mods like Slugbase, any features you have setup will be wiped and return the wrong value.  
+Personally I just add `|| true` to any features to bypass this while writing code.
+```
+ if (YourMod.YourFeature.TryGet(self, out bool canDoFeature) && canDoFeature || true)
+```
 
 Mostly adapted from: https://github.com/BepInEx/BepInEx.Debug/blob/master/src/ScriptEngine/ScriptEngine.cs
