@@ -12,6 +12,8 @@ using System.Reflection;
 using System.Collections;
 using HarmonyLib;
 using System.Runtime.CompilerServices;
+using System.Security;
+using Mono.Cecil.Pdb;
 
 namespace RainReloader
 {
@@ -97,23 +99,54 @@ namespace RainReloader
             string[] modDllFiles = Directory.GetFiles(modsFolder, "*.dll", SearchOption.AllDirectories);
             foreach (string file in modDllFiles)
             {
-                Log.LogWarning(file);
+                Log.LogInfo($"Found dll, attempting to load it. {file}");
+                bool tryLoadPdb = false;
                 string tmpFilePath = Path.GetTempFileName();
-                File.Copy(file, tmpFilePath, true);
-                Log.LogInfo($"Found DLL: {file}");
-                LoadDLL(tmpFilePath, scriptManager, reloadModsTxt);
+
+                string tmpDllPath = Path.ChangeExtension(tmpFilePath, ".dll");
+                string tmpPdbPath = Path.ChangeExtension(tmpFilePath, ".pdb");
+                File.Copy(file, tmpDllPath, true);
+                string pdbPath = Path.ChangeExtension(file, ".pdb");
+                if (File.Exists(pdbPath))
+                {
+                    Log.LogInfo($"Found pdb file, attempting to load it. {pdbPath}");
+                    File.Copy(Path.ChangeExtension(file, ".pdb"), tmpPdbPath, true);
+                    tryLoadPdb = true;
+                }
+                
+                LoadDLL(tmpDllPath, file, tmpPdbPath, tryLoadPdb, scriptManager, reloadModsTxt);
             }
         }
 
 
-        private void LoadDLL(string path, GameObject scriptManager, string[] reloadMods)
+        private void LoadDLL(string path, string sourcePath, string pdbFilePath, bool tryLoadPdb, GameObject scriptManager, string[] reloadMods)
         {
-            AssemblyDefinition dll = AssemblyDefinition.ReadAssembly(path);
+            ReaderParameters readerParams = new ReaderParameters();
+            ModuleDefinition sourceModuleDefinition = ModuleDefinition.ReadModule(sourcePath);
+            var pdbReader = new PdbReaderProvider();
+            if (tryLoadPdb)
+            {
+                readerParams.ReadSymbols = true;
+                pdbReader.GetSymbolReader(sourceModuleDefinition, pdbFilePath);
+                readerParams.SymbolReaderProvider = pdbReader;
+            }
+
+
+            AssemblyDefinition dll = AssemblyDefinition.ReadAssembly(path, readerParams);
             dll.Name.Name = $"${dll.Name.Name}-{DateTime.Now.Ticks}";
 
-            MemoryStream ms = new MemoryStream();
-            dll.Write(ms);
-            Assembly assembly = Assembly.Load(ms.ToArray());
+            Assembly assembly = null;
+
+            if (File.Exists (pdbFilePath))
+            {
+                Log.LogInfo($"Loading assembly with pdb data. {pdbFilePath}");
+                assembly = Assembly.Load(File.ReadAllBytes(path), File.ReadAllBytes(pdbFilePath));
+            }
+            else
+            {
+                assembly = Assembly.Load(File.ReadAllBytes(path));
+            }
+            
             foreach (Type type in GetTypesSafe(assembly))
             {
                 try
@@ -143,7 +176,12 @@ namespace RainReloader
                     }
 
 
-                    var typeDef = dll.MainModule.Types.First(x => x.FullName == type.FullName);
+                    TypeDefinition typeDef = dll.MainModule.Types.First(x => x.FullName == type.FullName);
+                    foreach (var stupid in typeDef.Methods)
+                    {
+                        Log.LogWarning(stupid.HasCustomDebugInformations);
+                    }
+                    Log.LogWarning(typeDef.Methods.First().HasCustomDebugInformations);
                     var pluginInfo = Chainloader.ToPluginInfo(typeDef);
 
                     this.StartCoroutine((DelayAction(() =>

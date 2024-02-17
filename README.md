@@ -2,9 +2,14 @@
 Live reloads and re-injects BepInEx plugins into rainworld  
 
 This mod is very early stages, isn't complete, barely works and isn't easy to setup. You need a good idea on how to setup a rainworld code mod to use this.  
+I wrote this for my own use, as such it only does what I need it to.  
+
+This mod can also load in .pdb files for debugging, make sure to enable it first in Solution Properties > Build > General > Debug Symbols
 
 Enable your mod in rainworld and remove it from "Rain World\RainWorld_Data\StreamingAssets\enabledMods.txt"  
-Create a new file called "reloadMods.txt" in the same StreamingAssets folder, then add your mod GUID to it.  
+Create a new file called "reloadMods.txt" in the same StreamingAssets folder, then add your mod GUID to it.   
+
+You will need to remove your mod from enableMods.txt every time you add or remove a mod.
 
 You'll also need to add an OnDisable() method to your mod that removes all registered delegates  
 ```
