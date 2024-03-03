@@ -1,19 +1,21 @@
 ﻿using System;
+using System.Collections;
 using System.Collections.Generic;
-using BepInEx;
-using BepInEx.Logging;
-using UnityEngine;
 using System.IO;
 using System.Linq;
-using System.Text;
-using BepInEx.Bootstrap;
-using Mono.Cecil;
 using System.Reflection;
-using System.Collections;
-using HarmonyLib;
 using System.Runtime.CompilerServices;
-using System.Security;
+using System.Text;
+using BepInEx;
+using BepInEx.Bootstrap;
+using BepInEx.Logging;
+using HarmonyLib;
+using Menu;
+using Mono.Cecil;
 using Mono.Cecil.Pdb;
+using Newtonsoft.Json;
+using RWCustom;
+using UnityEngine;
 
 namespace RainReloader
 {
@@ -31,120 +33,280 @@ namespace RainReloader
         private bool shouldReload = false;
 
         public GameObject scriptManager;
+        public static RainReloaderOptions reloaderOptions = new RainReloaderOptions();
+        public static Menu.Menu menu;
+        public RainWorldGame rainWorldGame;
+
+
+        public class ReloadModInfo
+        {
+            public string guid, folder;
+            public ReloadModInfo(string guid, string folder)
+            {
+                this.guid = guid;
+                this.folder = folder;
+            }
+        }
 
         private void Awake()
         {
             Log = base.Logger;
-            Log.LogInfo("RainReloader is active");
+
             On.RainWorld.PreModsInit += RainWorld_PreModsInit;
+            On.ModManager.ModApplyer.RequiresRestart += ModApplyer_RequiresRestart;
+            On.Menu.Menu.ctor += Menu_ctor;
+            On.RainWorldGame.ctor += RainWorldGame_ctor;
+            
         }
 
-        private void RainWorld_PreModsInit(On.RainWorld.orig_PreModsInit orig, RainWorld self)
+        private void RainWorldGame_ctor(On.RainWorldGame.orig_ctor orig, RainWorldGame self, ProcessManager manager)
         {
-            this.AttemptReload();
-            StartFileSystemWatcher();
-            orig(self);
+            orig(self, manager);
+            this.rainWorldGame = self;
         }
 
         private void Update()
         {
-            if (Input.GetKeyDown(KeyCode.Alpha1) || shouldReload)
+            if (this.rainWorldGame != null)
             {
-                this.AttemptReload();
+                if(Input.GetKeyDown(reloaderOptions.reloadKeyCode.Value) || shouldReload)
+                {
+                    if (!Input.GetKey(KeyCode.LeftShift))
+                    {
+                        this.rainWorldGame.RestartGame();
+                    }
+                    this.AttemptReload();
+                }
             }
+            else
+            {
+                if (Input.GetKeyDown(reloaderOptions.reloadKeyCode.Value) || shouldReload)
+                {
+                    this.AttemptReload();
+                }
+            }
+        }
+
+
+        private void Menu_ctor(On.Menu.Menu.orig_ctor orig, Menu.Menu self, ProcessManager manager, ProcessManager.ProcessID ID)
+        {
+            RainReloader.menu = self;
+            orig(self, manager, ID);
+        }
+
+        private void RainWorld_PreModsInit(On.RainWorld.orig_PreModsInit orig, RainWorld self)
+        {
+            MachineConnector.SetRegisteredOI(PLUGIN_GUID, reloaderOptions);
+            if (this.EditReloadModsTxtFile())
+            {
+                // This can happen if enabledMods.txt gets edited manually, or the apply mods function failed.
+                // we want to crash the game as EditReloadModsTxtFile has now fixed the file.
+                Log.LogFatal("enabledMods.txt contained a folder that is also in reloadMods.txt, this will cause duplicate mod copies to load.\n"+
+                    "Mod has been removed from reload mods, the game will now intentionally crash to load correctly.");
+                UnityEngine.Diagnostics.Utils.ForceCrash(UnityEngine.Diagnostics.ForcedCrashCategory.Abort);
+                return;
+            }
+            this.AttemptReload();
+            StartFileSystemWatcher();
+           
+            orig(self);
+        }
+
+
+        private bool ModApplyer_RequiresRestart(On.ModManager.ModApplyer.orig_RequiresRestart orig, ModManager.ModApplyer self)
+        {
+            if (self.requiresRestart)
+            {
+                if (menu != null)
+                {
+                    
+                }
+                if (this.EditReloadModsTxtFile())
+                {
+                    menu.PlaySound(SoundID.Thunder, 0, 1.4f, 1.4f);
+                }
+            }
+            return orig(self);
+        }
+
+
+
+        public List<ReloadModInfo> GetReloadModInfo()
+        {
+            if (!File.Exists(Path.Combine(Application.streamingAssetsPath, "reloadMods.txt")))
+            {
+                Log.LogError("Rain Reloader could not find reloadMods.txt file");
+                return null;
+            }
+            // get list of mods to care about
+            try
+            {
+                List<ReloadModInfo> reloadMods = new List<ReloadModInfo>();
+                string[] reloadModsLines = File.ReadAllLines(Path.Combine(Application.streamingAssetsPath, "reloadMods.txt"));
+                foreach (string line in reloadModsLines)
+                {
+                    string[] modPairData = line.Split(';');
+                    reloadMods.Add(new ReloadModInfo(modPairData[0], modPairData[modPairData.Length - 1]));
+                }
+                return reloadMods;
+            }
+            catch (Exception e)
+            {
+                Log.LogError($"Failed to read reloadMods.txt: {e}");
+                return null;
+            }
+        }
+
+        public bool EditReloadModsTxtFile()
+        {
+            List<ReloadModInfo> reloadModInfos = GetReloadModInfo();
+            if (reloadModInfos == null)
+            {
+                return false;
+            }
+            List<string> enabledModsLines = File.ReadAllLines(Path.Combine(Custom.RootFolderDirectory(), "enabledMods.txt")).ToList();
+            bool hasRemovedMod = false;
+            foreach (ReloadModInfo reloadModInfo in reloadModInfos)
+            {
+                Log.LogInfo($"Removing {reloadModInfo.guid} from enabledMods.txt");
+                if (enabledModsLines.Remove(reloadModInfo.folder))
+                {
+                    hasRemovedMod = true;
+                }
+            }
+            File.WriteAllLines(Path.Combine(Custom.RootFolderDirectory(), "enabledMods.txt"), enabledModsLines);
+            if (hasRemovedMod)
+            {
+                Log.LogInfo("Edit BepInEx enabledMods.txt file");
+            }
+            
+            return hasRemovedMod;
         }
 
         public void AttemptReload()
         {
-            Log.LogInfo("ATTEMPING RELOAD");
+            Log.LogInfo("!!! Rain Reload Started !!!");
+            
+            
             shouldReload = false;
-
-            // get list of mods to care about
-            string[] reloadModsTxt = File.ReadAllText(Path.Combine(Application.streamingAssetsPath, "reloadMods.txt")).Split(new string[] {Environment.NewLine}, StringSplitOptions.None);
-            Log.LogInfo(reloadModsTxt);
+            List<ReloadModInfo> reloadModInfos = GetReloadModInfo();
+            if (reloadModInfos == null)
+            {
+                return;
+            }
             scriptManager = Chainloader.ManagerObject;
 
-            Log.LogWarning(scriptManager);
             if (scriptManager != null)
             {
-                Log.LogWarning(scriptManager.activeInHierarchy);
                 
                 foreach (BaseUnityPlugin loadedPlugin in scriptManager.GetComponents<BaseUnityPlugin>())
                 {
                     BepInPlugin[] bepInPluginData = MetadataHelper.GetAttributes<BepInPlugin>(loadedPlugin.GetType());
                     foreach (BepInPlugin pluginData in bepInPluginData)
                     {
-                        Log.LogWarning($"Check plugin {pluginData.GUID}");
-                        //if (pluginData.GUID == metaGuid)
-                        
-                        if (reloadModsTxt.Contains(pluginData.GUID))
+                        if (reloadModInfos.Any(x => x.guid == pluginData.GUID))
                         {
                             Log.LogWarning($"Removing plugin {pluginData.GUID}");
                             Chainloader.PluginInfos.Remove(pluginData.GUID);
                             Destroy(loadedPlugin); // todo: does not actually destroy our plugin as scriptManager is incorrect
+                            
+
                         }
-                        
                     }
                 }
-              //  Destroy(scriptManager);
 
             }
-            // now create now?
-            //scriptManager = new GameObject($"ScriptEngine_{DateTime.Now.Ticks}");
-            //DontDestroyOnLoad(scriptManager);
 
-            //string modsFolder = Path.Combine(Application.streamingAssetsPath, "mods");
-            Log.LogWarning(modsFolder);
-
-            string[] modDllFiles = Directory.GetFiles(modsFolder, "*.dll", SearchOption.AllDirectories);
-            foreach (string file in modDllFiles)
+            List<string> skippedModFolders = new List<string>();
+            List<string> reloadedMods = new List<string>();
+            foreach (DirectoryInfo modDirInfo in new DirectoryInfo(modsFolder).GetDirectories())
             {
-                Log.LogInfo($"Found dll, attempting to load it. {file}");
-                bool tryLoadPdb = false;
-                string tmpFilePath = Path.GetTempFileName();
-
-                string tmpDllPath = Path.ChangeExtension(tmpFilePath, ".dll");
-                string tmpPdbPath = Path.ChangeExtension(tmpFilePath, ".pdb");
-                File.Copy(file, tmpDllPath, true);
-                string pdbPath = Path.ChangeExtension(file, ".pdb");
-                if (File.Exists(pdbPath))
+                if (!reloadModInfos.Any(x => x.folder == modDirInfo.Name))
                 {
-                    Log.LogInfo($"Found pdb file, attempting to load it. {pdbPath}");
-                    File.Copy(Path.ChangeExtension(file, ".pdb"), tmpPdbPath, true);
-                    tryLoadPdb = true;
+                    skippedModFolders.Add(modDirInfo.Name);
+                    continue;
                 }
-                
-                LoadDLL(tmpDllPath, file, tmpPdbPath, tryLoadPdb, scriptManager, reloadModsTxt);
+                reloadedMods.Add(modDirInfo.Name);
+                string[] modDllFiles = Directory.GetFiles(modDirInfo.ToString(), "*.dll", SearchOption.AllDirectories);
+                foreach (string sourceDllFile in modDllFiles)
+                {
+                    Log.LogInfo($"Found dll, attempting to load it. {sourceDllFile}");
+                    bool tryLoadPdb = false;
+                    string tmpFilePath = Path.GetTempFileName();
+
+                    string tmpDllPath = Path.ChangeExtension(tmpFilePath, ".dll");
+                    string tmpPdbPath = Path.ChangeExtension(tmpFilePath, ".pdb");
+                    File.Copy(sourceDllFile, tmpDllPath, true);
+                    string pdbPath = Path.ChangeExtension(sourceDllFile, ".pdb");
+                    if (File.Exists(pdbPath))
+                    {
+                        Log.LogInfo($"Found pdb file, attempting to load it. {pdbPath}");
+                        File.Copy(Path.ChangeExtension(sourceDllFile, ".pdb"), tmpPdbPath, true);
+                        tryLoadPdb = true;
+                    }
+
+                    LoadDLL(tmpDllPath, sourceDllFile, tmpPdbPath, tryLoadPdb, scriptManager);
+                }
             }
+            Log.LogInfo($"Reloaded mod folders: {reloadedMods.Join()}");
+            Log.LogInfo($"Skipped mod folders: {skippedModFolders.Join()}");
+            Log.LogInfo("!!! Rain Reload Completed !!!");
         }
 
+        public string GetModFolderNameFromPath(string fullPath)
+        {
+            DirectoryInfo fullDirInfo = new DirectoryInfo(fullPath);
+            List<DirectoryInfo> parentDirectories = new List<DirectoryInfo>();
+            GetAllParentDirectories(fullDirInfo, ref parentDirectories);
+            foreach (DirectoryInfo dir in parentDirectories) {
+                if (dir.Parent.Name == "mods")
+                {
+                    return dir.Name;
+                }
+            }
+            return null;
+        }
 
-        private void LoadDLL(string path, string sourcePath, string pdbFilePath, bool tryLoadPdb, GameObject scriptManager, string[] reloadMods)
+        private void GetAllParentDirectories(DirectoryInfo directory, ref List<DirectoryInfo> directories)
+        {
+            if (directory == null || directory.Name == directory.Root.Name)
+            {
+                return;
+            }
+            directories.Add(directory);
+            GetAllParentDirectories(directory.Parent, ref directories);
+        }
+
+        private void LoadDLL(string tmpDllPath, string sourceDllPath, string pdbFilePath, bool tryLoadPdb, GameObject scriptManager)
         {
             ReaderParameters readerParams = new ReaderParameters();
-            ModuleDefinition sourceModuleDefinition = ModuleDefinition.ReadModule(sourcePath);
+            ModuleDefinition sourceModuleDefinition = ModuleDefinition.ReadModule(sourceDllPath); 
             var pdbReader = new PdbReaderProvider();
-            if (tryLoadPdb)
-            {
-                readerParams.ReadSymbols = true;
-                pdbReader.GetSymbolReader(sourceModuleDefinition, pdbFilePath);
-                readerParams.SymbolReaderProvider = pdbReader;
-            }
+            //if (tryLoadPdb)
+            //{
+            //    readerParams.ReadSymbols = true;
+            //    pdbReader.GetSymbolReader(sourceModuleDefinition, pdbFilePath);
+            //    readerParams.SymbolReaderProvider = pdbReader;
+            //}
 
 
-            AssemblyDefinition dll = AssemblyDefinition.ReadAssembly(path, readerParams);
+            AssemblyDefinition dll = AssemblyDefinition.ReadAssembly(tmpDllPath, readerParams);
             dll.Name.Name = $"${dll.Name.Name}-{DateTime.Now.Ticks}";
+
+            MemoryStream ms = new MemoryStream();
+            dll.Write(ms); // this looks like it does nothing, it does not do nothing.
+            
 
             Assembly assembly = null;
 
             if (File.Exists (pdbFilePath))
             {
-                Log.LogInfo($"Loading assembly with pdb data. {pdbFilePath}");
-                assembly = Assembly.Load(File.ReadAllBytes(path), File.ReadAllBytes(pdbFilePath));
+                Log.LogInfo($"Loading assembly with pdb data. Dll: {tmpDllPath} Pdb: {pdbFilePath}");
+                assembly = Assembly.Load(ms.ToArray(), File.ReadAllBytes(pdbFilePath));
             }
             else
             {
-                assembly = Assembly.Load(File.ReadAllBytes(path));
+                assembly = Assembly.Load(ms.ToArray());
             }
             
             foreach (Type type in GetTypesSafe(assembly))
@@ -161,11 +323,6 @@ namespace RainReloader
                         continue;
                     }
 
-                    if (!reloadMods.Contains(pluginMetadata.GUID))
-                    {
-                        Log.LogWarning($"{pluginMetadata.GUID} is not in reload mods list");
-                        continue;
-                    }
 
                     Log.LogInfo($"Loading plugin {pluginMetadata.GUID}");
 
@@ -177,28 +334,25 @@ namespace RainReloader
 
 
                     TypeDefinition typeDef = dll.MainModule.Types.First(x => x.FullName == type.FullName);
-                    foreach (var stupid in typeDef.Methods)
-                    {
-                        Log.LogWarning(stupid.HasCustomDebugInformations);
-                    }
-                    Log.LogWarning(typeDef.Methods.First().HasCustomDebugInformations);
-                    var pluginInfo = Chainloader.ToPluginInfo(typeDef);
+                    PluginInfo typePluginInfo = Chainloader.ToPluginInfo(typeDef);
+
 
                     this.StartCoroutine((DelayAction(() =>
                     {
                         // Need to add to PluginInfos first because BaseUnityPlugin constructor (called by AddComponent below)
                         // looks in PluginInfos for an existing PluginInfo and uses it instead of creating a new one.
-                        Chainloader.PluginInfos[pluginMetadata.GUID] = pluginInfo;
+                        Chainloader.PluginInfos[pluginMetadata.GUID] = typePluginInfo;
                         //
                        // TryRunModuleCtor(pluginInfo, assembly, typeDef);
 
                         var instance = scriptManager.AddComponent(type);
+                        Log.LogInfo("Added component into script manager");
 
                         // Fill in properties that are normally set by Chainloader
-                        var tv = Traverse.Create(pluginInfo);
-                        tv.Property<BaseUnityPlugin>(nameof(pluginInfo.Instance)).Value = (BaseUnityPlugin)instance;
+                        var tv = Traverse.Create(typePluginInfo);
+                        tv.Property<BaseUnityPlugin>(nameof(typePluginInfo.Instance)).Value = (BaseUnityPlugin)instance;
                         // Loading the assembly from memory causes Location to be lost
-                        tv.Property<string>(nameof(pluginInfo.Location)).Value = path;
+                        tv.Property<string>(nameof(typePluginInfo.Location)).Value = tmpDllPath;
 
                         Log.LogInfo($"Loaded plugin of type {type} with GUID {pluginMetadata.GUID}");
                     })));
