@@ -25,12 +25,12 @@ namespace RainReloader
         public const string PLUGIN_GUID = "twofour2.rainReloader";
         public const string PLUGIN_NAME = "rainreloader";
         public const string PLUGIN_DESC = "";
-        public const string PLUGIN_VERSION = "0.2.9";
+        public const string PLUGIN_VERSION = "0.2.10";
         public static ManualLogSource Log { get; private set; }
 
         private static string modsFolder = Path.Combine(Application.streamingAssetsPath, "mods");
         private FileSystemWatcher fileSystemWatcher;
-        private bool shouldReload = false;
+        private bool fileWatcherShouldReload = false;
 
         public GameObject scriptManager;
         public static RainReloaderOptions reloaderOptions = new RainReloaderOptions();
@@ -69,18 +69,31 @@ namespace RainReloader
         {
             if (this.rainWorldGame != null)
             {
-                if(Input.GetKeyDown(reloaderOptions.reloadKeyCode.Value) || shouldReload)
+                if(Input.GetKeyDown(reloaderOptions.reloadKeyCode.Value))
                 {
+                    this.AttemptReload();
                     if (!Input.GetKey(KeyCode.LeftShift))
                     {
                         this.rainWorldGame.RestartGame();
                     }
+                }
+                else if (fileWatcherShouldReload)
+                {
                     this.AttemptReload();
+                    if (reloaderOptions.restartOnFileChange.Value)
+                    {
+                        this.rainWorldGame.RestartGame();
+                    }
+                }
+                if (Input.GetKeyDown(reloaderOptions.setDenKeyCode.Value))
+                {
+                    RainWorldGame.ForceSaveNewDenLocation(this.rainWorldGame, this.rainWorldGame.FirstAnyPlayer.Room.name, false);
+                    Log.LogInfo($"Rain reloader forced den location to {this.rainWorldGame.FirstAnyPlayer.Room.name}");
                 }
             }
             else
             {
-                if (Input.GetKeyDown(reloaderOptions.reloadKeyCode.Value) || shouldReload)
+                if (Input.GetKeyDown(reloaderOptions.reloadKeyCode.Value) || fileWatcherShouldReload)
                 {
                     this.AttemptReload();
                 }
@@ -117,10 +130,6 @@ namespace RainReloader
         {
             if (self.requiresRestart)
             {
-                if (menu != null)
-                {
-                    
-                }
                 if (this.EditReloadModsTxtFile())
                 {
                     menu.PlaySound(SoundID.Thunder, 0, 1.4f, 1.4f);
@@ -188,7 +197,7 @@ namespace RainReloader
             Log.LogInfo("!!! Rain Reload Started !!!");
             
             
-            shouldReload = false;
+            fileWatcherShouldReload = false;
             List<ReloadModInfo> reloadModInfos = GetReloadModInfo();
             if (reloadModInfos == null)
             {
@@ -423,7 +432,7 @@ namespace RainReloader
         private void FileChangedEventHandler(object sender, FileSystemEventArgs args)
         {
             Log.LogInfo($"File {Path.GetFileName(args.Name)} changed. Delayed recompiling...");
-            shouldReload = true;
+            fileWatcherShouldReload = true;
         }
 
 
