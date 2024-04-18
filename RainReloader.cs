@@ -13,6 +13,7 @@ using HarmonyLib;
 using Menu;
 using Mono.Cecil;
 using Mono.Cecil.Pdb;
+using MonoMod.RuntimeDetour.HookGen;
 using Newtonsoft.Json;
 using RWCustom;
 using UnityEngine;
@@ -36,6 +37,7 @@ namespace RainReloader
         public static RainReloaderOptions reloaderOptions = new RainReloaderOptions();
         public static Menu.Menu menu;
         public RainWorldGame rainWorldGame;
+        public int restartFrameCounter = -1;
 
 
         public class ReloadModInfo
@@ -56,7 +58,6 @@ namespace RainReloader
             On.ModManager.ModApplyer.RequiresRestart += ModApplyer_RequiresRestart;
             On.Menu.Menu.ctor += Menu_ctor;
             On.RainWorldGame.ctor += RainWorldGame_ctor;
-            
         }
 
         private void RainWorldGame_ctor(On.RainWorldGame.orig_ctor orig, RainWorldGame self, ProcessManager manager)
@@ -67,14 +68,26 @@ namespace RainReloader
 
         private void Update()
         {
+            
             if (this.rainWorldGame != null)
             {
-                if(Input.GetKeyDown(reloaderOptions.reloadKeyCode.Value))
+                // we need to wait a couple of frames before restarting the game
+                // to ensure that OnEnable() functions are called before any game re-init functions are run
+                if (this.restartFrameCounter == 0)
+                {
+                    Log.LogInfo("Restarting game now!");
+                    this.rainWorldGame.RestartGame();
+                }
+                if (this.restartFrameCounter >= 0)
+                {
+                    this.restartFrameCounter -= 1;
+                }
+                if (Input.GetKeyDown(reloaderOptions.reloadKeyCode.Value))
                 {
                     this.AttemptReload();
                     if (!Input.GetKey(KeyCode.LeftShift))
                     {
-                        this.rainWorldGame.RestartGame();
+                        this.restartFrameCounter = 3;
                     }
                 }
                 else if (fileWatcherShouldReload)
@@ -82,7 +95,7 @@ namespace RainReloader
                     this.AttemptReload();
                     if (reloaderOptions.restartOnFileChange.Value)
                     {
-                        this.rainWorldGame.RestartGame();
+                        this.restartFrameCounter = 3;
                     }
                 }
                 if (Input.GetKeyDown(reloaderOptions.setDenKeyCode.Value))
@@ -216,6 +229,16 @@ namespace RainReloader
                         if (reloadModInfos.Any(x => x.guid == pluginData.GUID))
                         {
                             Log.LogWarning($"Removing plugin {pluginData.GUID}");
+                            foreach(Component comp in scriptManager.GetComponents(typeof(Component))){
+                                if(loadedPlugin.GetType() == comp.GetType())
+                                {
+                                    Log.LogInfo("Found game component. Removing it");
+                                    Destroy(comp);
+                                }
+
+                               
+                                Log.LogInfo(comp);
+                            }
                             Chainloader.PluginInfos.Remove(pluginData.GUID);
                             Destroy(loadedPlugin); // todo: does not actually destroy our plugin as scriptManager is incorrect
                             
