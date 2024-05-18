@@ -1,6 +1,8 @@
 # RainReloader
 Live reloads and re-injects BepInEx plugins into rainworld  
 
+[Steam Workshop](https://steamcommunity.com/sharedfiles/filedetails/?id=3172072318)
+
 Create a new file called "reloadMods.txt" in the same StreamingAssets folder, then add your mod GUID to it along with the name of the mod folder seperated by a colon ";"   
 
 The mod GUID must match the one used in your BepInPlugin, specifically PLUGIN_GUID
